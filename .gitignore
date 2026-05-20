@@ -1,0 +1,10 @@
+# OULAD dataset — downloaded separately, never committed (see README)
+dataset/
+*.csv
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
