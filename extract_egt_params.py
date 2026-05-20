@@ -3,24 +3,27 @@
 Extract Evolutionary Game Theory (EGT) model parameters from the
 Open University Learning Analytics Dataset (OULAD).
 
-Two parameters are derived and printed to the console:
+The script derives two parameters PER COURSE-PRESENTATION, applies locked
+scaling constants, and reports the empirical extremes for comparative
+analysis:
 
   N_raw   -- "Note-Sharing Value / Free-Rider Extraction"
-             Average clicks on static asynchronous material (resource,
-             oucontent) by students who PASSED but NEVER attended a
-             synchronous live virtual class. These are the "successful
-             skippers" -- the free-riders the EGT model is built around.
+             Per-course mean of clicks on static asynchronous material
+             (resource, oucontent) by students who PASSED but NEVER attended
+             a synchronous live virtual class -- the "successful skippers".
 
   G_proxy -- "Grading Curve Effect / Sucker's Penalty"
-             Coefficient of Variation (sigma / mu) of assessment scores,
-             a proxy for how steep / competitive the grading curve is.
+             Per-course Coefficient of Variation (sigma / mu) of assessment
+             scores, a proxy for how steep / competitive the curve is.
+
+Stage 3 merges the two per-course tables, applies the locked scalars
+(ALPHA, GAMMA) to produce N_final / G_final, and prints the four extreme
+course-presentations (highest/lowest curve, highest/lowest VLE reliance)
+ready to plug into the differential-equation solver.
 
 Run from inside the Attendance-EGT-Model/ directory:
 
     python3 extract_egt_params.py
-
-Both values are printed at the end, ready to plug into the
-differential-equation solver.
 """
 
 from pathlib import Path
@@ -51,6 +54,11 @@ NOTE_TYPES = {"resource", "oucontent"}
 # Outcomes that count as having passed the course.
 SUCCESS = {"Pass", "Distinction"}
 
+# Locked scaling constants -- DO NOT MODIFY. These map the empirical OULAD
+# measurements onto the input range expected by the EGT solver.
+ALPHA = 0.001  # scales N_raw  -> N_final
+GAMMA = 1.0    # scales G_proxy -> G_final
+
 
 def banner(title: str) -> None:
     """Print a clearly delimited section header."""
@@ -60,10 +68,10 @@ def banner(title: str) -> None:
 
 
 # --------------------------------------------------------------------------
-# Pipeline 1 -- N (Note-Sharing Value / Free-Rider Extraction)
+# Pipeline 1 -- N_raw per course (Note-Sharing Value / Free-Rider Extraction)
 # --------------------------------------------------------------------------
-def extract_n() -> float:
-    banner("PIPELINE 1 -- N (Free-Rider Extraction)")
+def extract_n() -> pd.DataFrame:
+    banner("PIPELINE 1 -- N_raw per course (Free-Rider Extraction)")
 
     # -- Step 1: load the VLE material catalogue (small: ~6.4k rows). --------
     # id_site is globally unique here, but we keep the course keys so the
@@ -126,36 +134,50 @@ def extract_n() -> float:
     successful_idx = successful.set_index(STUDENT_KEYS).index
     print(f"Successful students   : {len(successful_idx):,} (Pass / Distinction)")
 
-    # -- Step 6: "Successful Skippers" = successful MINUS live attenders. ----
-    # MultiIndex difference performs the anti-join while preserving the
-    # per-course identity of each student.
-    skippers_idx = successful_idx.difference(live_attenders)
-    print(f"Successful skippers   : {len(skippers_idx):,} (passed, never attended live)")
+    # -- Step 6: master frame of "Successful Skippers" = successful MINUS ----
+    # live attenders. The MultiIndex difference performs the anti-join while
+    # preserving each student's per-course identity; we materialise it as a
+    # DataFrame so it can serve as the master frame for the left join below.
+    skippers = (
+        successful_idx.difference(live_attenders)
+        .to_frame(index=False)[STUDENT_KEYS]
+    )
+    print(f"Successful skippers   : {len(skippers):,} (passed, never attended live)")
 
     # -- Step 7: total note-material clicks per skipper. --------------------
-    # Keep only clicks on static async material, then sum per (student, course).
+    # Keep only clicks on static async material, then sum sum_click per
+    # (id_student, code_module, code_presentation).
     note_clicks = clicks.loc[clicks["activity_type"].isin(NOTE_TYPES)]
-    note_sums = note_clicks.groupby(STUDENT_KEYS, observed=True)["sum_click"].sum()
+    note_sums = (
+        note_clicks.groupby(STUDENT_KEYS, observed=True)["sum_click"]
+        .sum()
+        .reset_index()
+    )
 
-    # -- Step 8: restrict to skippers; zero-click skippers count as 0. ------
-    # Reindexing onto the full skipper index materialises every skipper;
-    # those with no resource/oucontent rows become NaN -> filled with 0.
-    skipper_note_sums = note_sums.reindex(skippers_idx).fillna(0)
-    n_zero = int((skipper_note_sums == 0).sum())
-    print(f"Skippers with 0 clicks: {n_zero:,} (included in the average as 0)")
+    # -- Step 8: LEFT JOIN aggregated clicks onto the skipper master frame. -
+    # Skippers with no resource/oucontent rows get NaN -> filled with 0, so
+    # every successful skipper contributes to the per-course mean.
+    skipper_clicks = skippers.merge(note_sums, on=STUDENT_KEYS, how="left")
+    skipper_clicks["sum_click"] = skipper_clicks["sum_click"].fillna(0)
+    n_zero = int((skipper_clicks["sum_click"] == 0).sum())
+    print(f"Skippers with 0 clicks: {n_zero:,} (kept via left join, counted as 0)")
 
-    # -- Step 9: global average across all successful skippers. -------------
-    n_raw = float(skipper_note_sums.mean())
-    print(f"\n>>> N_raw = {n_raw:.4f}")
-    print("    (mean note-material clicks per successful skipper)")
-    return n_raw
+    # -- Step 9: per-course mean -> N_raw for each course-presentation. -----
+    n_by_course = (
+        skipper_clicks.groupby(COURSE_KEYS, observed=True)["sum_click"]
+        .mean()
+        .reset_index()
+        .rename(columns={"sum_click": "N_raw"})
+    )
+    print(f"\n>>> N_raw computed for {len(n_by_course)} course-presentations.")
+    return n_by_course
 
 
 # --------------------------------------------------------------------------
-# Pipeline 2 -- G (Grading Curve Effect / Sucker's Penalty)
+# Pipeline 2 -- G_proxy per course (Grading Curve Effect / Sucker's Penalty)
 # --------------------------------------------------------------------------
 def extract_g() -> pd.DataFrame:
-    banner("PIPELINE 2 -- G (Grading Curve / Coefficient of Variation)")
+    banner("PIPELINE 2 -- G_proxy per course (Grading Curve / CV)")
 
     # -- Step 1: load assessment scores. ------------------------------------
     # Some scores are blank ("?"); coerce to numeric and drop the NaNs so the
@@ -189,23 +211,71 @@ def extract_g() -> pd.DataFrame:
         .reset_index()
     )
 
-    # -- Step 5: Coefficient of Variation = sigma / mu. ---------------------
+    # -- Step 5: Coefficient of Variation = sigma / mu -> G_proxy. ----------
     stats["G_proxy"] = stats["std"] / stats["mean"]
-
-    # -- Step 6: sort by G_proxy descending. --------------------------------
     stats = stats.sort_values("G_proxy", ascending=False).reset_index(drop=True)
 
     print(f"\nPer-course grading-curve dispersion ({len(stats)} course-presentations):\n")
     with pd.option_context(
-        "display.max_rows", None, "display.width", 100, "display.float_format", "{:.4f}".format
+        "display.max_rows", None,
+        "display.width", 100,
+        "display.float_format", "{:.4f}".format,
     ):
         print(stats.to_string(index=False))
 
-    # -- Step 7: overall average G_proxy across all courses. ----------------
-    g_mean = float(stats["G_proxy"].mean())
-    print(f"\n>>> G_proxy = {g_mean:.4f}")
-    print(f"    (mean Coefficient of Variation across {len(stats)} course-presentations)")
+    # Return the clean per-course frame (code_module, code_presentation,
+    # mean, std, G_proxy) for the integration engine.
     return stats
+
+
+# --------------------------------------------------------------------------
+# Stage 3 -- Integration and Scaling Engine
+# --------------------------------------------------------------------------
+def integrate_and_scale(
+    n_by_course: pd.DataFrame, g_by_course: pd.DataFrame
+) -> pd.DataFrame:
+    banner("INTEGRATION & SCALING ENGINE")
+
+    # -- Merge the two per-course parameter tables on the course identifier. -
+    matrix = n_by_course.merge(
+        g_by_course[COURSE_KEYS + ["G_proxy"]],
+        on=COURSE_KEYS,
+        how="inner",
+    )
+
+    # -- Apply the locked scalars to produce the final solver inputs. -------
+    matrix["N_final"] = matrix["N_raw"] * ALPHA
+    matrix["G_final"] = matrix["G_proxy"] * GAMMA
+
+    print(f"Locked scalars        : ALPHA = {ALPHA}, GAMMA = {GAMMA}")
+    print(f"Course-presentations  : {len(matrix)}\n")
+    with pd.option_context(
+        "display.max_rows", None,
+        "display.width", 100,
+        "display.float_format", "{:.4f}".format,
+    ):
+        print(
+            matrix[COURSE_KEYS + ["N_raw", "G_proxy", "N_final", "G_final"]]
+            .to_string(index=False)
+        )
+
+    # -- Isolate the four empirical extremes via idxmax / idxmin. -----------
+    edges = [
+        ("HIGHEST CURVE        (max G_final)", matrix["G_final"].idxmax()),
+        ("LOWEST CURVE         (min G_final)", matrix["G_final"].idxmin()),
+        ("HIGHEST VLE RELIANCE (max N_final)", matrix["N_final"].idxmax()),
+        ("LOWEST VLE RELIANCE  (min N_final)", matrix["N_final"].idxmin()),
+    ]
+
+    banner("EMPIRICAL EXTREMES -- SOLVER INPUT PAIRS")
+    for label, idx in edges:
+        row = matrix.loc[idx]
+        print(f"\n{label}")
+        print(f"  Course   : {row['code_module']} {row['code_presentation']}")
+        print(f"  N_final  : {row['N_final']:.6f}")
+        print(f"  G_final  : {row['G_final']:.6f}")
+    print()
+    return matrix
 
 
 # --------------------------------------------------------------------------
@@ -218,15 +288,9 @@ def main() -> None:
             "Edit DATA_DIR at the top of this script to point at the OULAD CSVs."
         )
 
-    n_raw = extract_n()
-    g_stats = extract_g()
-    g_proxy = float(g_stats["G_proxy"].mean())
-
-    # -- Final summary: the two values for the EGT solver. ------------------
-    banner("EGT MODEL PARAMETERS")
-    print(f"  N_raw   = {n_raw:.4f}")
-    print(f"  G_proxy = {g_proxy:.4f}   (mean across {len(g_stats)} courses)")
-    print("=" * 70)
+    n_by_course = extract_n()
+    g_by_course = extract_g()
+    integrate_and_scale(n_by_course, g_by_course)
 
 
 if __name__ == "__main__":

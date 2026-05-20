@@ -7,12 +7,14 @@ empirical parameters from the Open University Learning Analytics Dataset
 
 ## What `extract_egt_params.py` does
 
-The script reads the OULAD CSVs with `pandas` and computes two scalar
-parameters, printing them to the console ready to paste into the solver.
+The script reads the OULAD CSVs with `pandas` and runs three stages: it
+derives `N_raw` and `G_proxy` **per course-presentation**, applies locked
+scaling constants, and reports the empirical extremes — all printed to the
+console ready to paste into the solver.
 
-### `N_raw` — Note-Sharing Value / Free-Rider Extraction
+### Stage 1 — `N_raw`: Note-Sharing Value / Free-Rider Extraction
 
-The average number of clicks on **static asynchronous material**
+The **per-course** mean number of clicks on **static asynchronous material**
 (`resource`, `oucontent`) made by **successful skippers** — students who
 passed the course (`Pass` or `Distinction`) but **never** attended a
 synchronous live virtual class. The pipeline:
@@ -24,15 +26,17 @@ synchronous live virtual class. The pipeline:
 2. Flags **Live Attenders** — any `(student, course)` pair with at least one
    click on a live web-conferencing tool (`oucollaborate` or `ouelluminate`).
 3. Takes successful students from `studentInfo.csv` and removes the Live
-   Attenders, leaving the **Successful Skippers**.
-4. Sums each skipper's clicks on `resource`/`oucontent` material; skippers
-   with zero such clicks count as `0`.
-5. `N_raw` is the global mean of those per-skipper sums.
+   Attenders, leaving the **Successful Skippers** master frame.
+4. Sums each skipper's clicks on `resource`/`oucontent` material, then
+   **left-joins** those sums back onto the master frame so skippers with zero
+   such clicks are kept and counted as `0`.
+5. Groups by course and takes the mean — `N_raw` for each course-presentation.
 
-### `G_proxy` — Grading Curve Effect / Sucker's Penalty
+### Stage 2 — `G_proxy`: Grading Curve Effect / Sucker's Penalty
 
-The **Coefficient of Variation** (`CV = sigma / mu`) of assessment scores,
-a proxy for how steep and competitive the grading curve is. The pipeline:
+The **per-course** **Coefficient of Variation** (`CV = sigma / mu`) of
+assessment scores, a proxy for how steep and competitive the grading curve
+is. The pipeline:
 
 1. Joins `studentAssessment.csv` to `assessments.csv` to attach each score to
    its course-presentation; blank/invalid scores are coerced to `NaN` and
@@ -40,7 +44,18 @@ a proxy for how steep and competitive the grading curve is. The pipeline:
 2. Computes the mean (`mu`) and sample standard deviation (`sigma`) of the
    `score` column per course-presentation.
 3. `G_proxy` per course is `sigma / mu`; the script prints the full per-course
-   table sorted descending, plus the overall mean across all courses.
+   table sorted descending.
+
+### Stage 3 — Integration & Scaling Engine
+
+1. Merges the per-course `N_raw` and `G_proxy` tables on
+   `code_module` / `code_presentation`.
+2. Applies two **locked constants** — `ALPHA = 0.002` and `GAMMA = 1.0` — to
+   produce the final solver inputs: `N_final = N_raw × ALPHA` and
+   `G_final = G_proxy × GAMMA`.
+3. Uses `idxmax` / `idxmin` to isolate and print the four empirical extremes —
+   highest/lowest grading curve and highest/lowest VLE reliance — each with
+   its course identifier and `(N_final, G_final)` pair.
 
 ## Dataset
 
@@ -118,14 +133,32 @@ cd Attendance-EGT-Model
 python3 extract_egt_params.py
 ```
 
-The script prints both pipelines' diagnostics and ends with the two
-parameters:
+The script prints each stage's diagnostics, the full per-course parameter
+matrix (`N_raw`, `G_proxy`, `N_final`, `G_final` for all 22
+course-presentations), and ends with the four extreme courses:
 
 ```
 ======================================================================
-EGT MODEL PARAMETERS
+EMPIRICAL EXTREMES -- SOLVER INPUT PAIRS
 ======================================================================
-  N_raw   = 392.4109
-  G_proxy = 0.2395   (mean across 22 courses)
-======================================================================
+
+HIGHEST CURVE        (max G_final)
+  Course   : BBB 2014J
+  N_final  : 0.460719
+  G_final  : 0.410651
+
+LOWEST CURVE         (min G_final)
+  Course   : EEE 2014J
+  N_final  : 0.589751
+  G_final  : 0.176682
+
+HIGHEST VLE RELIANCE (max N_final)
+  Course   : FFF 2014J
+  N_final  : 1.165468
+  G_final  : 0.181847
+
+LOWEST VLE RELIANCE  (min N_final)
+  Course   : BBB 2013B
+  N_final  : 0.032826
+  G_final  : 0.227268
 ```
