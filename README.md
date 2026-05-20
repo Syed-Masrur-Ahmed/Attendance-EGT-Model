@@ -50,7 +50,7 @@ is. The pipeline:
 
 1. Merges the per-course `N_raw` and `G_proxy` tables on
    `code_module` / `code_presentation`.
-2. Applies two **locked constants** — `ALPHA = 0.002` and `GAMMA = 1.0` — to
+2. Applies two **locked constants** — `ALPHA = 0.001` and `GAMMA = 1.0` — to
    produce the final solver inputs: `N_final = N_raw × ALPHA` and
    `G_final = G_proxy × GAMMA`.
 3. Uses `idxmax` / `idxmin` to isolate and print the four empirical extremes —
