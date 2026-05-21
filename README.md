@@ -11,6 +11,11 @@ The current empirical layers are:
 - **StudentLife**: builds a proxy for `C`, the effort cost of attending class,
   from weekly stress, sleep loss, and deadline pressure.
 
+For the planned stochastic simulation layer, see
+[`STOCHASTIC_SIMULATION_README.md`](STOCHASTIC_SIMULATION_README.md). That file
+lays out the deterministic replicator extension, finite-population Monte Carlo
+simulation, proposed module structure, output files, and validation checklist.
+
 ## What `extract_egt_params.py` does
 
 The script reads the OULAD CSVs with `pandas` and runs three stages: it
