@@ -1,9 +1,15 @@
 # Attendance-EGT-Model
 
 An Evolutionary Game Theory (EGT) study of classroom attendance modelled as a
-public-goods game. This repository holds the data-extraction stage: deriving
-empirical parameters from the Open University Learning Analytics Dataset
-(OULAD) to feed an EGT differential-equation solver.
+public-goods game. This repository holds empirical preprocessing scripts that
+support the payoff parameters used by an EGT differential-equation solver.
+
+The current empirical layers are:
+
+- **OULAD**: estimates `N`, the note-sharing / asynchronous academic value,
+  and `G`, a grading-curve / assessment-dispersion proxy.
+- **StudentLife**: builds a proxy for `C`, the effort cost of attending class,
+  from weekly stress, sleep loss, and deadline pressure.
 
 ## What `extract_egt_params.py` does
 
@@ -57,9 +63,75 @@ is. The pipeline:
    highest/lowest grading curve and highest/lowest VLE reliance — each with
    its course identifier and `(N_final, G_final)` pair.
 
+## What `build_studentlife_c_proxy.py` does
+
+The StudentLife script builds an empirical proxy for `C`, the effort cost of
+attending class. This is a separate preprocessing step from the OULAD script:
+it does **not** replace the EGT simulation, and it does not estimate `N` or
+`G`. Instead, it gives the model an evidence-backed range for the attendance
+cost parameter.
+
+For each student-week, the script computes:
+
+```text
+C_i,w = normalized stress_i,w
+      + normalized sleep loss_i,w
+      + normalized deadline pressure_i,w
+```
+
+where:
+
+```text
+sleep loss_i,w = max(0, 8 - sleep hours_i,w)
+```
+
+The raw weekly index is then min-max rescaled to:
+
+```text
+C_i,w in [0, 1.5]
+```
+
+This makes the heatmap range for `C` defensible: instead of treating `C` as a
+single fixed constant, the model can say that StudentLife shows effort cost
+varies across the term as stress, sleep loss, and deadline pressure change.
+
+### StudentLife inputs
+
+The script uses:
+
+- `dataset/student-life/EMA/response/Stress/` for stress self-reports.
+- `dataset/student-life/EMA/response/Sleep/` for sleep-duration self-reports.
+- `dataset/student-life/education/deadlines.csv` for weekly deadline load.
+- `dataset/student-life/education/grades.csv` for a descriptive, non-causal
+  grade-correlation check.
+
+### StudentLife outputs
+
+Running the script creates:
+
+```text
+outputs/studentlife/
+├── studentlife_C_by_week.csv
+├── studentlife_C_weekly_summary.csv
+├── studentlife_C_by_student.csv
+├── studentlife_C_grade_correlations.csv
+└── studentlife_C_weekly_plot.png
+```
+
+The student-week CSV is the main model-facing output. The weekly summary and
+plot describe the term-level pattern. The student summary and grade
+correlations are descriptive diagnostics only; they require at least four valid
+`C` weeks per student and should not be interpreted as causal evidence that
+effort cost changes grades.
+
 ## Dataset
 
-This project uses the **Open University Learning Analytics Dataset (OULAD)**.
+This project uses two external datasets.
+
+### Open University Learning Analytics Dataset
+
+The OULAD preprocessing stage uses the **Open University Learning Analytics
+Dataset (OULAD)**.
 
 > Kuzilek, J., Hlosta, M., & Zdrahal, Z. (2017). Open University Learning
 > Analytics dataset. *Scientific Data*, 4, 170171.
@@ -72,15 +144,37 @@ The dataset is **not included** in this repository — download it separately
 (see below). It is distributed under the
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) licence.
 
+### StudentLife
+
+The StudentLife preprocessing stage uses the Dartmouth StudentLife dataset.
+Place it at:
+
+```text
+dataset/student-life/
+```
+
+The relevant folders/files are:
+
+```text
+dataset/student-life/
+├── EMA/response/Stress/
+├── EMA/response/Sleep/
+└── education/
+    ├── deadlines.csv
+    ├── grades.csv
+    └── piazza.csv
+```
+
 ## Setup
 
 ### 1. Requirements
 
 - Python 3.9+
-- `pandas` (developed against 2.2.3)
+- `pandas`
+- `pillow`
 
 ```bash
-pip install pandas
+pip install pandas pillow
 ```
 
 ### 2. Download and unzip the dataset
@@ -128,6 +222,8 @@ DATA_DIR = Path("/absolute/path/to/dataset")
 
 ## Usage
 
+### OULAD extraction for `N` and `G`
+
 ```bash
 cd Attendance-EGT-Model
 python3 extract_egt_params.py
@@ -162,3 +258,33 @@ LOWEST VLE RELIANCE  (min N_final)
   N_final  : 0.032826
   G_final  : 0.227268
 ```
+
+### StudentLife extraction for `C`
+
+If using the repo-local virtual environment:
+
+```bash
+source .venv/bin/activate
+python build_studentlife_c_proxy.py
+```
+
+Or run it directly:
+
+```bash
+.venv/bin/python build_studentlife_c_proxy.py
+```
+
+Expected console summary:
+
+```text
+StudentLife C proxy generated
+  stress responses used : 2154
+  sleep responses used  : 1372
+  student-week rows     : 484
+  valid C rows          : 268
+  output directory      : .../outputs/studentlife
+```
+
+The important modeling output is `studentlife_C_by_week.csv`, which gives a
+student-week-level `C_scaled` value in `[0, 1.5]` when stress, sleep, and
+deadline components are all available.
