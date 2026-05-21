@@ -1,6 +1,7 @@
 # OULAD dataset — downloaded separately, never committed (see README)
 dataset/
 *.csv
+!outputs/**/*.csv
 
 # macOS
 .DS_Store

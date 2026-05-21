@@ -1,0 +1,4 @@
+outcome,n_students,min_observed_c_weeks,pearson_corr_with_C_mean
+gpa all,27,4,0.025198736568449412
+gpa 13s,27,4,-0.1671628735627958
+cs 65,27,4,-0.006464110936671184
