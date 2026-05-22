@@ -364,6 +364,171 @@ def plot_same_pq_comparison():
 
 
 # -------------------------------------------------------------------
+# Step 7: Empirical weekly C from StudentLife
+# -------------------------------------------------------------------
+
+STUDENTLIFE_WEEKLY = Path("outputs/studentlife/studentlife_C_weekly_summary.csv")
+DAYS_PER_WEEK = 5
+
+
+def load_empirical_c_sequence() -> tuple[list[float], list[str]]:
+    """Return (day-level C values, week_start labels) from StudentLife weekly summary."""
+    import csv as _csv
+    weeks, c_means = [], []
+    with open(STUDENTLIFE_WEEKLY, newline="") as f:
+        for row in _csv.DictReader(f):
+            weeks.append(row["week_start"])
+            c_means.append(float(row["C_mean"]))
+    # Expand to one value per class day
+    c_sequence = [c for c in c_means for _ in range(DAYS_PER_WEEK)]
+    return c_sequence, weeks
+
+
+def plot_empirical_c_experiment():
+    c_sequence, week_labels = load_empirical_c_sequence()
+    T = len(c_sequence) - 1          # 54 days (11 weeks × 5)
+    week_ticks = list(range(0, T + 1, DAYS_PER_WEEK))
+    short_labels = [w[5:] for w in week_labels]  # "MM-DD" from "YYYY-MM-DD"
+
+    fig, axes = plt.subplots(2, 2, figsize=(13, 8))
+    axes = axes.flatten()
+
+    for ax, (scenario, sc) in zip(axes, SCENARIOS.items()):
+        # Use p=0.25, Q=0.5, beta=0.25 with base C ignored (overridden by c_sequence)
+        params = AttendanceParams(
+            K=K_DEFAULT, N=sc["N"], G=sc["G"],
+            C=C_DEFAULT, E=E_DEFAULT,
+            p=P_DEFAULT, Q=Q_DEFAULT, beta_note=BETA_DEFAULT,
+        )
+        all_runs = run_monte_carlo_batch(
+            params, M=MC_M, N_pop=MC_N_POP, T=T,
+            initial_skip_rate=MC_X0,
+            selection_intensity=MC_SEL,
+            mutation_rate=MC_MUT,
+            base_seed=MC_SEED,
+            c_sequence=c_sequence,
+        )
+
+        mc_mat  = np.array([[r["skip_rate"] for r in run] for run in all_runs])
+        mc_mean = mc_mat.mean(axis=0)
+        mc_p10  = np.percentile(mc_mat, 10, axis=0)
+        mc_p90  = np.percentile(mc_mat, 90, axis=0)
+        mc_t    = np.arange(T + 1)
+
+        # Left axis: skip fraction
+        color = COL_DARK.get("attend", "#4CAF50")
+        ax.fill_between(mc_t, mc_p10, mc_p90, alpha=0.25, color="#4CAF50")
+        ax.plot(mc_t, mc_mean, color="#4CAF50", lw=2.0, label="MC mean skip rate")
+        ax.set_ylim(-0.05, 1.05)
+        ax.set_ylabel(r"Skip fraction $x$", color="#2e7d32")
+        ax.tick_params(axis="y", labelcolor="#2e7d32")
+        ax.set_xticks(week_ticks)
+        ax.set_xticklabels(short_labels, rotation=45, ha="right", fontsize=7)
+        ax.set_xlabel("Week start")
+        ax.set_title(f"{sc['label']}\n$N={sc['N']},\\ G={sc['G']}$", fontsize=10)
+
+        # Right axis: empirical C overlaid as a step line
+        ax2 = ax.twinx()
+        c_day = np.array(c_sequence)
+        ax2.step(np.arange(len(c_day)), c_day, where="post",
+                 color="#b5651d", lw=1.5, ls="--", alpha=0.8, label="Weekly $C$ (StudentLife)")
+        ax2.set_ylim(0, 1.05)
+        ax2.set_ylabel("Effort cost $C$", color="#b5651d")
+        ax2.tick_params(axis="y", labelcolor="#b5651d")
+        ax2.spines["right"].set_visible(True)
+
+        # Combined legend
+        lines1, labs1 = ax.get_legend_handles_labels()
+        lines2, labs2 = ax2.get_legend_handles_labels()
+        ax.legend(lines1 + lines2, labs1 + labs2, fontsize=7, frameon=False, loc="upper left")
+
+    fig.suptitle(
+        rf"Empirical Weekly $C$ (StudentLife) — MC Skip Fraction over Semester"
+        rf"  |  $p={P_DEFAULT},\ Q={Q_DEFAULT},\ \beta={BETA_DEFAULT}$",
+        fontsize=11, y=0.995,
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    path = OUT / "empirical_c_experiment.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"empirical_c_experiment.png → {path}")
+
+
+# -------------------------------------------------------------------
+# Step 7b: Empirical C — p=0 vs p=0.25 comparison
+# -------------------------------------------------------------------
+
+def plot_empirical_c_no_intervention():
+    c_sequence, week_labels = load_empirical_c_sequence()
+    T = len(c_sequence) - 1
+    week_ticks  = list(range(0, T + 1, DAYS_PER_WEEK))
+    short_labels = [w[5:] for w in week_labels]
+
+    configs = [
+        {"p": 0.0,       "Q": 0.0,      "color": "#E76D81", "label": "No intervention ($p=0$)"},
+        {"p": P_DEFAULT, "Q": Q_DEFAULT, "color": "#4CAF50", "label": f"Enforcement ($p={P_DEFAULT}$)"},
+    ]
+
+    fig, axes = plt.subplots(2, 2, figsize=(13, 8))
+    axes = axes.flatten()
+
+    for ax, (scenario, sc) in zip(axes, SCENARIOS.items()):
+        for cfg in configs:
+            params = AttendanceParams(
+                K=K_DEFAULT, N=sc["N"], G=sc["G"],
+                C=C_DEFAULT, E=E_DEFAULT,
+                p=cfg["p"], Q=cfg["Q"], beta_note=BETA_DEFAULT,
+            )
+            all_runs = run_monte_carlo_batch(
+                params, M=MC_M, N_pop=MC_N_POP, T=T,
+                initial_skip_rate=MC_X0,
+                selection_intensity=MC_SEL,
+                mutation_rate=MC_MUT,
+                base_seed=MC_SEED,
+                c_sequence=c_sequence,
+            )
+            mc_mat  = np.array([[r["skip_rate"] for r in run] for run in all_runs])
+            mc_mean = mc_mat.mean(axis=0)
+            mc_p10  = np.percentile(mc_mat, 10, axis=0)
+            mc_p90  = np.percentile(mc_mat, 90, axis=0)
+            mc_t    = np.arange(T + 1)
+
+            ax.fill_between(mc_t, mc_p10, mc_p90, alpha=0.18, color=cfg["color"])
+            ax.plot(mc_t, mc_mean, color=cfg["color"], lw=2.0, label=cfg["label"])
+
+        # Empirical C on right axis
+        ax2 = ax.twinx()
+        ax2.step(np.arange(len(c_sequence)), c_sequence, where="post",
+                 color="#b5651d", lw=1.4, ls=":", alpha=0.7, label="Weekly $C$")
+        ax2.set_ylim(0, 1.05)
+        ax2.set_ylabel("Effort cost $C$", color="#b5651d", fontsize=9)
+        ax2.tick_params(axis="y", labelcolor="#b5651d")
+        ax2.spines["right"].set_visible(True)
+
+        ax.set_ylim(-0.05, 1.05)
+        ax.set_ylabel(r"Skip fraction $x$")
+        ax.set_xticks(week_ticks)
+        ax.set_xticklabels(short_labels, rotation=45, ha="right", fontsize=7)
+        ax.set_xlabel("Week start")
+        ax.set_title(f"{sc['label']}  $N={sc['N']},\\ G={sc['G']}$", fontsize=10)
+
+        lines1, labs1 = ax.get_legend_handles_labels()
+        lines2, labs2 = ax2.get_legend_handles_labels()
+        ax.legend(lines1 + lines2, labs1 + labs2, fontsize=7, frameon=False, loc="upper right")
+
+    fig.suptitle(
+        rf"Empirical Weekly $C$ — No Intervention vs Enforcement  "
+        rf"|  $Q={Q_DEFAULT},\ \beta={BETA_DEFAULT}$",
+        fontsize=11, y=0.995,
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    path = OUT / "empirical_c_no_intervention.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"empirical_c_no_intervention.png → {path}")
+
+
+# -------------------------------------------------------------------
 # Main
 # -------------------------------------------------------------------
 
@@ -392,6 +557,9 @@ def main():
     plot_trajectory_comparison()
     plot_phase_diagram()
     plot_same_pq_comparison()
+
+    print("\n=== Step 7: Empirical C experiment ===")
+    plot_empirical_c_experiment()
 
     print("\nDone. All outputs in outputs/stochastic/")
 

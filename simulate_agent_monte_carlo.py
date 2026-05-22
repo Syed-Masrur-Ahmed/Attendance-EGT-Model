@@ -41,10 +41,14 @@ def run_one_simulation(
     selection_intensity: float = 5.0,
     mutation_rate: float = 0.005,
     seed: int = 123,
+    c_sequence: list[float] | None = None,
 ) -> list[dict]:
     """
     Returns a list of dicts with one entry per time step:
-      t, skip_rate, intervention_happened
+      t, skip_rate, intervention_happened, C_t
+
+    If c_sequence is provided, C varies each time step (c_sequence[t % len]).
+    Otherwise params.C is used throughout.
     """
     rng = np.random.default_rng(seed)
 
@@ -52,21 +56,25 @@ def run_one_simulation(
     n_skip = int(round(initial_skip_rate * N_pop))
     strategies = np.array([1] * n_skip + [0] * (N_pop - n_skip), dtype=np.int8)
 
-    # Precompute payoff lookup
-    pss  = _payoff_skip_vs_skip(params)
-    psa  = _payoff_skip_vs_attend(params)
-    pas  = _payoff_attend_vs_skip(params)
-    paa  = _payoff_attend_vs_attend(params)
+    # Payoffs that don't depend on C — precompute once
+    pss = _payoff_skip_vs_skip(params)
+    psa = _payoff_skip_vs_attend(params)
 
     records = []
 
     for t in range(T + 1):
+        # Resolve C for this time step
+        C_t = c_sequence[t % len(c_sequence)] if c_sequence is not None else params.C
+        pas = params.K + params.E - C_t - params.G
+        paa = params.K + params.E - C_t
+
         skip_rate = strategies.mean()
         intervention = bool(rng.random() < params.p)
         records.append({
             "t": t,
             "skip_rate": float(skip_rate),
             "intervention_happened": int(intervention),
+            "C_t": C_t,
         })
 
         if t == T:
@@ -128,6 +136,7 @@ def run_monte_carlo_batch(
     selection_intensity: float = 5.0,
     mutation_rate: float = 0.005,
     base_seed: int = 123,
+    c_sequence: list[float] | None = None,
 ) -> list[list[dict]]:
     """Run M independent simulations, returning a list of per-run record lists."""
     return [
@@ -135,6 +144,7 @@ def run_monte_carlo_batch(
             params, N_pop, T, initial_skip_rate,
             selection_intensity, mutation_rate,
             seed=base_seed + run_id,
+            c_sequence=c_sequence,
         )
         for run_id in range(M)
     ]
